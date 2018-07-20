@@ -1,0 +1,387 @@
+---
+title: "Proyecto"
+author: "Jose Antonio Ruiz Millan y Juan Carlos Ruiz Garcia"
+date: "5 de junio de 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = normalizePath("./datos")) 
+set.seed(3395)
+library(caret)
+library(glmnet)
+library(neuralnet)
+library(doParallel)
+library(parallel)
+library(kernlab)
+library(rpart)
+library(adabag)
+library(plyr)
+```
+
+\begin{center}
+\section{1. Ajuste del mejor modelo.}
+\end{center}
+
+Este ejercicio se centra en el ajustar el mejor predictor (lineal o no-lineal) a un conjunto de
+datos. Debemos mostrar que los distintos algoritmos proponen soluciones para los datos pero
+que unas soluciones son mejores que otros para unos datos dados. El criterio que usaremos en la
+comparación será el error medio cuadrático para regresión, la curva ROC en clasificación binaria y
+el número de errores en clasificación multiclase. Además de un modelo lineal se deberán presentar
+resultados con al menos dos modelos de entre los propuestos.
+
+Los posibles modelos no-lineales a usar son:
+
+\begin{itemize}
+\item \textbf{Redes Neuronales}. Considerar tres clases de funciones definidas por arquitecturas con
+1,2 y 3 capas de unidades ocultas y número de unidades por capa en el rango 0-50. Definir
+un conjunto de modelos(arquitecturas) y elegir el mejor por validación cruzada. Recordar
+que a igualdad de $E_{out}$ siempre es preferible la arquitectura más pequeña.
+\item \textbf{Máquina de Soporte de Vectores (SVM)}: usar solo el núcleo RBF-Gaussiano o el
+polinomial. Encontrar el mejor valor para el parámetro libre hasta una precisión de 2 cifras
+(enteras o decimales)
+\item \textbf{Boosting}: Para clasificación usar AdaBoost con funciones “stamp”. Para regresión usar
+árboles como regresores simples.
+\item \textbf{Random Forest}: Usar los valores que por defecto se dan en la teoría y experimentar para
+obtener el número de árboles adecuado.
+\end{itemize}
+
+Se habrá de buscar el mejor modelo posible para la base de datos seleccionada y se habrá de
+justificar cada uno de los pasos dados para conseguirlo. Los puntos de discusión señalados en el
+trabajo.3 deben de servir como guía.
+
+\textbf{La base de datos utilizada en nuestro caso es: \textit{Smartphone-Based Recognition of Human Activities and Postural Transitions Data Set }}, por lo que nuestro problema es un problema de clasificación.
+
+Antes de nada, comentar que el paquete que vamos a utlizar en todos los casos es el paquete caret, ya que nos permite realizar todas las operaciones con simples instrucciones. Toda la información sobre este paquete se puede ver en https://topepo.github.io/caret/index.html
+
+No obstante, los paquetes necesarios para el correcto funcionamiento de la practica son:
+\begin{itemize}
+\item caret
+\item glmnet
+\item doParallel
+\item parallel
+\item kernlab
+\item rpart
+\item adabag
+\item plyr
+\end{itemize}
+
+**1. Comprender el problema a resolver.**
+
+Los experimentos se llevaron a cabo con un grupo de 30 voluntarios dentro de un grupo de edad de 19-48 años. Realizaron un protocolo de actividades compuesto por seis actividades básicas: tres posturas estáticas (de pie, sentado, acostado) y tres actividades dinámicas (caminar, bajar escaleras y subir escaleras). El experimento también incluyó transiciones posturales que ocurrieron entre las posturas estáticas. Estos son: de pie-a-sentarse, sentarse-a-de pie, sentarse-a-acostarse, acostarse-a-sentarse, de pie-a-acostarse y acostarse-a-de pie. Todos los participantes llevaban un teléfono inteligente (Samsung Galaxy S II) en la cintura durante la ejecución del experimento. Captura la aceleración lineal de 3 ejes y la velocidad angular de 3 ejes a una velocidad constante de 50 Hz utilizando el acelerómetro integrado y el giroscopio del dispositivo. Los experimentos fueron grabados en video para etiquetar los datos manualmente. El conjunto de datos obtenidos se dividió aleatoriamente en dos conjuntos, donde el 70% de los voluntarios se seleccionó para generar los datos de entrenamiento y el 30% de los datos de prueba.
+
+Las señales del sensor (acelerómetro y giroscopio) se preprocesaron mediante la aplicación de filtros de ruido y luego se tomaron muestras en ventanas correderas de ancho fijo de 2,56 segundos y 50% de superposición (128 lecturas / ventana). La señal de aceleración del sensor, que tiene componentes de movimiento gravitacional y corporal, se separó usando un filtro de paso bajo Butterworth en la aceleración del cuerpo y la gravedad. Se supone que la fuerza gravitacional tiene componentes de baja frecuencia, por lo tanto, se utilizó un filtro con una frecuencia de corte de 0.3 Hz. Desde cada ventana, se obtuvo un vector de 561 características calculando variables del dominio de tiempo y frecuencia. Ver 'features_info.txt' para más detalles.
+
+\textbf{Información adicional}
+
+- Las características están normalizadas y limitadas dentro de [-1,1]. 
+- Cada vector de características es una fila en los archivos 'X' y 'y'. 
+- Las unidades utilizadas para las aceleraciones (total y cuerpo) son 'g's (gravedad de la tierra -> 9.80665 m / seg2). 
+- Las unidades del giroscopio son rad / seg.
+
+**2. Preprocesado los datos: por ejemplo categorización, normalización, etc.**
+
+Como indicamos en el apartado anterior, estos datos ya vienen preprocesados, por lo que mostraré con algunas gŕaficas realmente la distribución de algunos de ellos ya que son demasiadas variables y también realizaremos el preprocesado PCA para eliminar variables y quedarnos con un numero de variables que nos permita explicar un 95% de la varianza de los datos.
+
+```{r warning=FALSE}
+# Leemos el fichero que vemos a continuación, que contiene
+# el nombre de las diferentes actividades que realiza cada 
+# una de las personas como está indicado en el apartado 1.
+temp <- read.table("activity_labels.txt",sep="",header = FALSE)
+
+# Nos quedamos uícamente con estos valores ya que la primera
+# columna son identificadores.
+activityLabels <- as.character(temp$V2)
+
+#Leemos ahora los datos de train que contiene únicamente los propios datos.
+#Leemos también el test para tenerlo ya cargado.
+train.x <- read.table("X_train.txt", sep = "",header=FALSE)
+test.x <- read.table("X_test.txt", sep = "",header=FALSE)
+
+#Leemos también las etiquetas de estos correspondientes datos.
+train.y <- read.table("y_train.txt", sep = "",header=FALSE)
+test.y <- read.table("y_test.txt", sep = "",header=FALSE)
+
+#Le asignamos un nombre a la columna, en mi caso será Actividad.
+colnames(train.y) <- "Actividad"
+colnames(test.y) <- "Actividad"
+
+#Los pasamos a factor para facilitar su uso posterior.
+train.y$Actividad <- as.factor(train.y$Actividad)
+test.y$Actividad <- as.factor(test.y$Actividad)
+
+#Enlazamos cada uno de ellos con la actividad a la que pertenece.
+levels(train.y$Actividad) <- activityLabels
+levels(test.y$Actividad) <- activityLabels
+```
+
+Una vez tenemos los datos vamos a mostrar algunos gráficos para poder visualizar la distribución de los mismos.
+
+```{r warning=FALSE}
+#Diagrama de caja
+featurePlot(x=train.x[,230:236],y=train.y$Actividad,plot="box",
+            main = "Diagrama de caja (TRAIN)")
+
+#Diagrama de dispersion
+featurePlot(x=train.x[,230:236],y=train.y$Actividad,plot="pairs",
+            main = "Diagrama de dispersion (TRAIN)")
+
+#Diagrama de densidad
+featurePlot(x=train.x[,230:236],y=train.y$Actividad,plot="density",
+            main = "Diagrama de densidad (TRAIN)")
+
+#Unimos todos los datos en un sólo conjunto
+train <- cbind(train.x,train.y)
+test <- cbind(test.x,test.y)
+
+train$Particion = "Train"
+test$Particion = "Test"
+
+#Unimos todos los datos, tanto train como test para comprobar su 
+#distribución en las particiones.
+all <- rbind(train, test)
+
+qplot(data=all, x=all$Actividad, fill=Particion)
+```
+
+Podemos ver en las gráficas que todos los datos de la misma clase suelen estar compactos y unidos e incluso que entre algunos de ellos existe una buena relación. No obstante vamos a realizar el preprocesado indicado anteriormente para intentar minimizar el espacio. También utilizaremos el preprocesado para eliminar las caracteristicas que tengan varianza cero. 
+
+Podemos visualizar en el último gráfico los datos de train y test están bien distribuidos ya que tenemos más elementos de cada tipo en train que en test y están bien distribuidos.
+
+Además visualizamos que para las últimas 6 clases tenemos muchos menos datos que en el resto, por lo que esto aprenderá al aprendizaje negativamente.
+
+```{r warning=FALSE}
+#Preprocesamos y mostramos los resultados.
+preprocesado <- preProcess(train.x,method = c("nzv","pca"))
+print(preprocesado)
+
+#Aplicamos los cambios.
+train.x.Pre <- predict(preprocesado,train.x)
+test.x.Pre <- predict(preprocesado,test.x)
+```
+
+Podemos ver como el preprocesado ha sido capaz de dejarnos el número de variables en 103, cuando en un principio teníamos 561. Esto nos dice que hemos conseguido reducir un 81% de las variables para poder explicar el 95% de la varianza.
+
+**3. Selección de clases de funciones a usar.**
+
+En nuestro caso, utilizaremos las clases de funciones lineales para un ajuste lineal utilizando el algoritmo de regresion logísitca y tambien utilizaremos modelos no lineales como el SVM y el Boosting. Esto nos permitirá ver que tipo de modelo y clase se ajusta mejor a estos datos.
+
+**4. Definición de los conjuntos de training, validación y test usados en su caso.**
+
+En este conjunto de datos, tenemos los datos separados, es decir, la definicion de los mismos nos dicen que hat un 70% de los datos en train y un 30% de los datos en test. Por lo que esta tarea estaría completada. No obstante, para las particiones de validación usaremos CV (validacion cruzada) que los creará automáticamente a partir de los datos del train.
+
+**5. Discutir la necesidad de regularización y en su caso la función usada para ello.**
+
+En nuestro caso, en el modelo lineal vamos a utilizar dos tipos de regularización, L1 regularization (Regularización Lasso)y otro basado en L2 regularization (Regularización Ridge). Nos quedaremos con la que mejor resultado nos ofrezca y ese será el modelo final.
+
+\begin{itemize}
+\item L1 regularization: Añade una penalización igual a la suma del valor absoluto de los coeficientes.
+\begin{center}
+$Error_{L1}=Error+\lambda\sum_{i=0}^{N}|\beta_i|$
+\end{center}
+\item L2 regularization: Añade una penalización igual a la suma de los coeficientes al cuadrado.
+\begin{center}
+$Error_{L2}=Error+\lambda\sum_{i=0}^{N}|\beta_i^2|$
+\end{center}
+\end{itemize}
+
+**6. Definir los modelos a usar y estimar sus parámetros e hyperparámetros.**
+
+\subsection{Modelo lineal}
+
+Para este apartado, utilizaremos regresión logística multiclase ya que obtuvimos un buen resultado en la práctica anterior y permite solucionar este problema. Utilizaremos dos tipos de regularización para 
+
+Para ello, lo primero que vamos a hacer es a través de CV (validacion cruzada) obtener los parámetros óptimos y así obtener un buen porcetaje de acierto o almenos intentar obtenerlo.
+
+```{r warning=FALSE}
+#Funcion para calcular el error
+clas.Err <- function(datos,predicciones){
+  err <- 0
+
+  for(i in 1:length(predicciones)){
+    if(datos[i,ncol(datos)]!=predicciones[i]) err <- err+1
+  }
+  err <- err/length(predicciones)
+  err
+}
+
+#Definimos el control a utilizar en el que únicamente especificamos que vamos a 
+#usar validacion cruzada con 10 folds.
+ctrol <- trainControl(method="cv", number=10)
+
+#Creamos los dos grid para el entrenamiento. Uno realizara la regularizacion 
+#Lasso y otro la regularización Ridge
+GridLasso <-  expand.grid(alpha =1,lambda = seq(0.0001,2,length = 100))
+GridRidge <-  expand.grid(alpha =0,lambda = seq(0.0001,2,length = 100))
+
+#Paralelizamos el proceso para que se realice más rapido.
+cl <- makePSOCKcluster(detectCores())
+registerDoParallel(cl)
+
+#Realizamos los diferentes entrenamientos utilizando glmnet con las distintas regularizaciones.
+modelo.lineal.Lasso <- train(x=as.matrix(train.x.Pre) , y=train.y$Actividad ,
+                             method ="glmnet", trControl = ctrol,tuneGrid=GridLasso)
+modelo.lineal.Ridge <- train(x=as.matrix(train.x.Pre) , y=train.y$Actividad ,
+                             method ="glmnet", trControl = ctrol,tuneGrid=GridRidge)
+
+stopCluster(cl)
+
+#Mostramos los hiperparametros de los modelos.
+print(modelo.lineal.Lasso)
+print(modelo.lineal.Ridge)
+
+#Calculamos el E_in de los distintos modelo que hemos creado.
+predicciones.lineal.Lasso <- predict(modelo.lineal.Lasso,train.x.Pre)
+predicciones.lineal.Ridge <- predict(modelo.lineal.Ridge,train.x.Pre)
+
+#Mostramos los distintos errores que hemos obtenido
+print(clas.Err(cbind(train.x.Pre,train.y),predicciones.lineal.Lasso))
+print(clas.Err(cbind(train.x.Pre,train.y),predicciones.lineal.Ridge))
+```
+
+Hemos obtenido un resultado mejor en la regularizacion Lasso que en la regularización Ridge, por lo que por ahora, seleccionaremos de estre estos dos, el que utiliza regularizacion Lasso.
+
+\subsection{SVM}
+
+```{r warning=FALSE}
+#Creamos el control
+ctrol <- trainControl(method="cv", number=10)
+
+#Creamos para la paralelizacion
+cl <- makePSOCKcluster(detectCores())
+registerDoParallel(cl)
+
+#Ejecutamos los train para crear los modelos.
+modelo.no_lineal.SVM.RBF <- train(x=as.matrix(train.x.Pre) , y=train.y$Actividad,
+                                  method ="svmRadial", trControl = ctrol)
+modelo.no_lineal.SVM.Polynomial <- train(x=as.matrix(train.x.Pre) , y=train.y$Actividad,
+                                         method ="svmPoly", trControl = ctrol)
+
+#Cerramos la paralelizacion
+stopCluster(cl)
+
+#Mostramos los hiperparametros de los modelos
+print(modelo.no_lineal.SVM.RBF)
+print(modelo.no_lineal.SVM.Polynomial)
+
+#Calculamos el E_in de los distintos modelo que hemos creado.
+predicciones.no_lineal.SVM.RBF <- predict(modelo.no_lineal.SVM.RBF,train.x.Pre)
+predicciones.no_lineal.SVM.Polynomial <- predict(modelo.no_lineal.SVM.Polynomial,
+                                                 train.x.Pre)
+
+#Mostramos los distintos errores que hemos obtenido
+print(clas.Err(cbind(train.x.Pre,train.y),predicciones.no_lineal.SVM.RBF))
+print(clas.Err(cbind(train.x.Pre,train.y),predicciones.no_lineal.SVM.Polynomial))
+```
+
+Podemos ver como obtenemos un error menor en el polinomial que en el RBF e incluso que en la regresión logísitca por lo que por el momento, el modelo a utlizar será SVM Polinomial. Los mejores valores obtenidos han sido \textit{degree}=3, \textit{scale}=0.01 y \textit{C}=1.
+
+\subsection{Boosting}
+
+```{r warning=FALSE}
+#Creamos el control
+ctrol <- trainControl(method="cv", number=10)
+
+#Paralelizamos el proceso para que se realice más rapido.
+cl <- makePSOCKcluster(detectCores())
+registerDoParallel(cl)
+
+#Creamos el modelo
+modelo.no_lineal.boosting <- train(x=as.matrix(train.x.Pre) , y=train.y$Actividad ,
+                                   method ="AdaBoost.M1", trControl = ctrol)
+
+#Terminamos la paralelizacion
+stopCluster(cl)
+
+#Mostramos lo hiperparametros del modelo
+print(modelo.no_lineal.boosting)
+
+#Obtenemos las predicciones
+predicciones.no_lineal.boosting <- predict(modelo.no_lineal.boosting,train.x.Pre)
+
+#Mostramos el error
+clas.Err(cbind(train.x.Pre,train.y),predicciones.no_lineal.boosting)
+```
+
+Vemos que este modelo es el peor de todos, por lo que de los 5 modelos usados (2 de regresión logistica lineal, 2 de SVM y boosting) nos quedaremos como modelo final el \textbf{SVM Polinomial}, ya que es el que nos ofrece un $E_{in}$ mas bajo.
+
+**7. Selección y ajuste modelo final.**
+
+Como hemos dicho anteriormente, ya tenemos elegido el modelo final, por lo que en este paso lo que haremos será entrenar un nuevo modelo utlizando el mismo algoritmo (SVM Polinomial), 
+pero en este caso utilizando la totalidad de los datos del train y los parámetros optimos que obtuvimos con la validación cruzada.
+
+```{r warning=FALSE}
+#Especificamos los parámetros óptimos
+GridSVMpoly <-  expand.grid(scale = modelo.no_lineal.SVM.Polynomial[["bestTune"]][["scale"]],
+                            degree = modelo.no_lineal.SVM.Polynomial[["bestTune"]][["degree"]],
+                            C = modelo.no_lineal.SVM.Polynomial[["bestTune"]][["C"]])
+
+#Paralelizamos el proceso para que se realice más rapido.
+cl <- makePSOCKcluster(detectCores())
+registerDoParallel(cl)
+
+#Creamos el modelo
+modelo.final <- train(x=as.matrix(train.x.Pre) , y=train.y$Actividad ,
+                      method ="svmPoly", tuneGrid = GridSVMpoly)
+
+#Terminamos la paralelizacion
+stopCluster(cl)
+
+# Mostramos el modelo final
+print(modelo.final)
+
+#Obtenemos las predicciones
+predicciones.final <- predict(modelo.final,train.x.Pre)
+
+#Mostramos el error
+clas.Err(cbind(train.x.Pre,train.y),predicciones.final)
+```
+
+**8. Discutir la idoneidad de la métrica usada en el ajuste**
+
+Para ello, vamos a utilizar la matriz de confusión que nos permite ver perfectamente como el predictor está realizando su trabajo y tambien podemos ver dónde especificamente se está equivocando el clasificador.
+
+```{r warning=FALSE}
+confusionMatrix(data=train.y$Actividad, reference = as.factor(predicciones.final))
+```
+
+Nos damos cuenta, que el modelo utilizado nos da una predicción muy buena. Teniendo una media de acierto del 99% y pudiendo afirmar que a un 95% de confianza el porcentaje de acierto estará entre (0.9968, 0.9989), con un valor p-value < 2.2e-16.
+
+Por otro lado, nos fijamos que nuestro modelo unicamente comente errores en las acciones de SITTING (estar sentado) y STANDING (estar de pié), cosa que es bastante lógica, ya que 
+son posiciónes muy similares respecto a los datos tomados de los usuarios que han realizado el experimento y aunque el error es mínimo no es extraño que se cometa.
+
+**9. Estimacion del error Eout del modelo lo más ajustada posible.**
+
+Ahora calcularemos las predicciones con el modelo creado anteriormente y por último estimaremos el $E_{out}$ con la función definida en apartados anteriores que nos devuelve el porcentaje de error en clasificación de los datos totales.
+
+```{r warning=FALSE}
+#Predecimos las nuevas etiquetas
+predicciones.test <- predict(modelo.final, test.x.Pre)
+
+#Mostramos el error
+clas.Err(cbind(test.x.Pre,test.y),predicciones.test)
+
+#Mostramos la matriz de confusión para visualizar mejor los errores 
+#y los aciertos obtenidos
+confusionMatrix(data=test.y$Actividad, reference = as.factor(predicciones.test))
+```
+
+Vemos que como hemos comentando en apartados anteriores, al tener menos datos en algunas clases, hemos obtenido más fallos sobre dichas clases. Esto es totalmente normal, ya que el 
+aprendizaje sobre estas ha sido mucho menor que sobre el resto de clases. No obstante, han aumentado los errores en algunas de las clases, aunque el principal fallo sigue siendo entre 
+la clase SITTING (estar sentado) y STANDING (estar de pié) al igual que en el aprendizaje.
+
+Aún asi, el porcentaje de acierto obtenido en el test es del 91%, valor más que aceptable.
+
+**10. Discutir y justificar la calidad del modelo encontrado y las razones por las que considera que dicho modelo es un buen ajuste que representa adecuadamente los datos muestrales.**
+
+Durante el desarrollo de los experimentos realizados con los distintos modelos utilizados, hemos obtenido:
+
+  * En regresión logística Lasso: un error en los datos del train de 0.019 y en el entrenamiento con CV (Cross-Validation) un error de 0.04.
+  * En regresión logística Ridge: un error en los datos del train de 0.04 y en el entrenamiento con CV (Cross-Validation) un error de 0.05.
+  * En SVM-RBF: un error en los datos del train de 0.016 y en el entrenamiento con CV (Cross-Validation) un error de 0.04.
+  * En SVM-Polinomy: un error en los datos del train de 0.0019 y en el entrenamiento con CV (Cross-Validation) un error de 0.031.
+  * En Boosting: un error en los datos del train de 0.163 y en el entrenamiento con CV (Cross-Validation) un error de 0.198.
+
+Basandonos en estos resultados, decidimos seleccionar como modelo final el **SVM-Polinomy** ya que es el que mejor resultados nos daba. Hemos comprobado utilizando como métrica la **matriz de confusión** que realmente era un modelo de calidad.
+
+Por otro lado, utilizando este modelo, hemos obtenidos un error de 0.084 en el test, lo cual es un resultado muy bueno y por tanto podemos constatar que el modelo elegido/seleccionado es un modelo factible para este problema concreto.
